@@ -1,0 +1,768 @@
+---
+title: "Disaster Relief Project: Part 2"
+author: "Nima Beheshti"
+date: "05/10/2021"
+output:
+  html_document:
+    number_sections: true    
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: espresso    
+
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(error=TRUE,        # Keep compiling upon error
+                      collapse=FALSE,    # collapse by default
+                      echo=TRUE,         # echo code by default
+                      comment = "#>",    # change comment character
+                      fig.width = 5.5,     # set figure width
+                      fig.align = "center",# set figure position
+                      out.width = "49%", # set width of displayed images
+                      warning=TRUE,      # show R warnings
+                      message=TRUE)      # show R messages
+```
+
+
+**SYS 6018 | Spring 2021 | University of Virginia **
+
+*******************************************
+
+# Introduction 
+
+This project is looking to test seven different classification/prediction methods to help solve a real world life or death problem. The earthquakes that devastated Haiti in the early 2010s left the country in ruins and created an alarming humanitarian crisis. Many thousands of people died, hundreds of thousands more were displaced with their homes ruined. In addition, thousands of people were in dire need of food and water to survive. Humanitarian groups banned together to try and save as many Haitians as possible but many survivors were scattered with little to no access to the resources needed to survive. These humanitarian groups gave blue tarps to survivors to help them have at least some sort of warmth following the devastation of these earthquakes.
+
+Humanitarian workers needed to find and save as many people as possible from starvation and dehydration but they didn't have an easy way to locate all the survivors given all the destruction. The workers found that the survivors were using these blue tarps for shelter and that the survivors could be located by searching areal photos/videos for these blue tarps. The fastest way to do this was by creating a predictive model to find these survivors. In a race for life or death we are tasked with putting together a model that can accurately locate the blue tarps given the data set from the areal photos. From there we will test our models on our hold-out data set to ensure we find the optimal algorithm for saving as many lives as possible.
+
+# Set-up 
+```{r load-packages, warning=FALSE, message=FALSE}
+# Load Required Packages
+library(tidyverse)
+library(boot)
+library(caret)
+library(leaps)
+library(MASS)
+library(class)
+library(glmnet)
+library(ROSE)
+library(randomForest)
+library(e1071)
+library(knitr)
+```
+
+```{r}
+# Load training data
+haiti <- read.csv('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/HaitiPixels.csv', header= TRUE)
+attach(haiti)
+```
+
+```{r, cache=TRUE}
+#Loading hold-out data
+Holdout57_Non <- read.delim2('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Hold+Out+Data/orthovnir057_ROI_NON_Blue_Tarps.txt', header = TRUE, sep = "")
+Holdout57_Non$Class <- "N"
+
+Holdout67_Blue <- read.delim('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Hold+Out+Data/orthovnir067_ROI_Blue_Tarps.txt', header = TRUE, sep = "")
+Holdout67_Blue$Class <- "Y"
+
+Holdout67_Non <- read.delim('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Hold+Out+Data/orthovnir067_ROI_NOT_Blue_Tarps.txt', header = TRUE, sep = "")
+Holdout67_Non$Class <- "N"
+
+Holdout69_Blue <- read.delim('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Hold+Out+Data/orthovnir069_ROI_Blue_Tarps.txt', header = TRUE, sep = "")
+Holdout69_Blue$Class = "Y"
+
+Holdout69_Non <- read.delim('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Hold+Out+Data/orthovnir069_ROI_NOT_Blue_Tarps.txt', header = TRUE, sep = "")
+Holdout69_Non$Class = "N"
+
+Holdout78_Blue <- read.delim('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Hold+Out+Data/orthovnir078_ROI_Blue_Tarps.txt', header = TRUE, sep = "")
+Holdout78_Blue$Class <- "Y"
+
+Holdout78_Non <- read.delim('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Hold+Out+Data/orthovnir078_ROI_NON_Blue_Tarps.txt', header = TRUE, sep = "")
+Holdout78_Non$Class <- "N"
+```
+
+
+```{r}
+# Fixing the 'char' values in this dataset
+Holdout57_Non$Map_X <- as.numeric(Holdout57_Non$Map_X)
+Holdout57_Non$Map_Y <- as.numeric(Holdout57_Non$Map_Y)
+Holdout57_Non$Lat <- as.numeric(Holdout57_Non$Lat)
+Holdout57_Non$Lon <- as.numeric(Holdout57_Non$Lon)
+```
+
+```{r}
+# Combine data frame
+Holdout = rbind(Holdout57_Non, Holdout67_Blue, Holdout67_Non, Holdout69_Blue, Holdout69_Non, Holdout78_Blue, Holdout78_Non)
+```
+
+
+# Training Data / EDA
+
+```{r}
+# Finding mean of variables for haiti, and holdout data set
+mean(haiti$Red)
+mean(haiti$Green)
+mean(haiti$Blue)
+mean(Holdout$B1)
+mean(Holdout$B2)
+mean(Holdout$B3)
+```
+Based on these results and the relative distances between the means of the Red, Green, and Blue and those of B1, B2, and B3, we can assume that B1 corresponds to Red, B2 corresponds to Green, and B3 corresponds to Blue. We can further confirm this assumption when seeing how similar the predictions will be from the cross-validation dataset and the hold-out dataset.
+
+
+```{r}
+# Factoring the Holdout dataset, and changing names of the B1, B2, and B3 variables 
+Holdout$Class = as.factor(Holdout$Class)
+names(Holdout)[names(Holdout) == "B1"] <- "Red"
+names(Holdout)[names(Holdout) == "B2"] <- "Green"
+names(Holdout)[names(Holdout) == "B3"] <- "Blue"
+
+#Number of N/Y in Holdout dataset
+summary(Holdout$Class)
+```
+
+
+```{r}
+# Some EDA steps on the cross-validation and hold-out datasets
+names(haiti)
+summary(haiti$Class)
+unique(haiti$Class)
+range(haiti$Red)
+range(haiti$Blue)
+range(haiti$Green)
+range(Holdout$Red)
+range(Holdout$Green)
+range(Holdout$Blue)
+```
+
+
+```{r}
+# Factoring the Class variable for haiti, Y corresponds to blue tarp, N corresponds to no blue tarp
+haiti$Class <- factor(haiti$Class)
+levels(haiti$Class)
+levels(haiti$Class)[1]
+haiti$Class <- ifelse(haiti$Class == "Blue Tarp", 'Y', 'N')
+haiti$Class <- as.factor(haiti$Class)
+levels(haiti$Class)
+
+# Number of N, and Y within the haiti dataset
+summary(haiti$Class)
+```
+
+
+## Logistic Regression
+```{r, cache=TRUE}
+set.seed(96)
+
+#Cross Validation and training 
+train.control = trainControl(method = 'cv', number = 10)
+glm.fit <- train(Class~., data = haiti, method = 'glm', family = 'binomial', trControl = train.control)
+print(glm.fit)
+
+#Model prediction and table for train
+glm.probs = predict(glm.fit, haiti, type = 'prob')
+glm.quan = quantile(glm.probs$Y, .97)
+glm.pred <- rep(0,63241)
+glm.pred[glm.probs$Y > glm.quan] = 1
+table(glm.pred, haiti$Class)
+```
+
+
+```{r}
+#Calculations for train prediction
+glm.quan
+accuracy.glm = (61138+1817)/(61138+1817+81+205)
+accuracy.glm
+tpr.glm = (1817/(1817+205))
+tpr.glm
+fpr.glm = (81/(81+61138)) 
+fpr.glm
+precision.glm = (1817/(1817+81))
+precision.glm
+
+#ROC Curve for train prediction
+roc.curve(haiti$Class, glm.probs$Y)
+```
+
+Logistic Regression Results(training): Tuning - NA, AUROC - 0.998, Threshold - 0.375, Accuracy - 0.995, TPR - 0.899, FPR - 0.00132, Precision - 0.957
+
+```{r}
+# Model prediction on Holdout Data
+Holdout.glm.probs = predict(glm.fit, Holdout, type = 'prob')
+Holdout.glm.quan = quantile(Holdout.glm.probs$Y, .97)
+Holdout.glm.pred <- rep(0,2004177)
+Holdout.glm.pred[Holdout.glm.probs$Y > Holdout.glm.quan] = 1
+table(Holdout.glm.pred, Holdout$Class)
+```
+
+```{r}
+#Calculations for holdout prediction
+Holdout.glm.quan
+Holdout.accuracy.glm = (1943935+14364)/(1943935+14364+116+45762)
+Holdout.accuracy.glm
+Holdout.tpr.glm = (14364/(116+14364))
+Holdout.tpr.glm
+Holdout.fpr.glm = (45762/(45762+1943935)) 
+Holdout.fpr.glm
+Holdout.precision.glm = (14364/(14364+45762))
+Holdout.precision.glm
+
+#ROC Curve for holdout prediction
+roc.curve(Holdout$Class, Holdout.glm.probs$Y)
+```
+
+Logistic Regression Answers(Holdout): Tuning - NA, AUROC - 0.999, Threshold - 0.306, Accuracy - 0.977, TPR - .992, FPR - 0.0230, Precision - 0.239
+
+## LDA
+
+```{r}
+set.seed(96)
+#Cross Validation and training on training data
+train.control = trainControl(method = 'cv', number = 10)
+lda.model <- train(as.factor(Class)~., data = haiti, method = 'lda', trControl = train.control)
+print(lda.model)
+
+#Model prediction for training data
+lda.probs = predict(lda.model, haiti, type = 'prob')
+lda.quan = quantile(lda.probs$Y, 0.97)
+lda.pred <- rep(0,63241)
+lda.pred[lda.probs$Y > lda.quan] = 1
+table(lda.pred, haiti$Class)
+```
+
+
+```{r}
+#Calculations for model train
+lda.quan
+accuracy.lda = (60808+1471)/(60808+1471+551+411)
+accuracy.lda
+tpr.lda = (1471/(1471+551))
+tpr.lda
+fpr.lda = (411/(411+60808)) 
+fpr.lda
+precision.lda = (1471/(1471+411))
+precision.lda
+
+#ROC Curve for model train
+roc.curve(haiti$Class, lda.probs$Y)
+```
+
+Linear Discriminate Analysis Results(training): Tuning - NA, AUROC - 0.989, Threshold - 0.93, Accuracy - 0.985, TPR - 0.727, FPR - 0.00671, Precision - 0.782
+
+
+```{r}
+# LDA Model prediction on Holdout Data
+Holdout.lda.probs = predict(lda.model, Holdout, type = 'prob')
+Holdout.lda.quan = quantile(Holdout.lda.probs$Y, .97)
+Holdout.lda.pred <- rep(0,2004177)
+Holdout.lda.pred[Holdout.lda.probs$Y > lda.quan ] = 1
+table(Holdout.lda.pred, Holdout$Class)
+```
+
+
+```{r}
+# Calculations for hold-out LDA model
+Holdout.lda.quan
+Holdout.accuracy.lda = (1963386+10155)/(1963386+10155+4325+26311)
+Holdout.accuracy.lda
+Holdout.tpr.lda = (10155/(4325+10155))
+Holdout.tpr.lda
+Holdout.fpr.lda = (26311/(26311+1963386)) 
+Holdout.fpr.lda
+Holdout.precision.lda = (10155/(10155+26311))
+Holdout.precision.lda
+
+#ROC hold-out lda model
+roc.curve(Holdout$Class, Holdout.lda.probs$Y)
+```
+
+Linear Discriminate Analysis Results(holdout): Tuning - NA, AUROC - 0.992, Threshold - 0.0548, Accuracy - 0.985, TPR - 0.701, FPR - 0.0132, Precision - 0.278
+
+## QDA
+
+```{r}
+set.seed(1)
+#Cross Validation and training
+train.control = trainControl(method = 'cv', number = 10)
+qda.model <- train(as.factor(Class)~., data = haiti, method = 'qda', trControl = train.control)
+print(qda.model)
+
+#Model prediction for training
+qda.probs = predict(qda.model, haiti, type = 'prob')
+qda.quan = quantile(qda.probs$Y, .97)
+qda.pred <- rep(0,63241)
+qda.pred[qda.probs$Y > qda.quan] = 1
+table(qda.pred, haiti$Class)
+```
+
+```{r}
+#Calculations for QDA training set
+qda.quan
+accuracy.qda = (61145+1762)/(61145+1762+260+74)
+accuracy.qda
+tpr.qda = (1762/(260+1762))
+tpr.qda
+fpr.qda = (74/(61145+74))
+fpr.qda
+precision.qda = (1762/(1762+74))
+precision.qda
+
+#ROC Curve for QDA training set
+roc.curve(haiti$Class, qda.probs$Y)
+```
+
+Quadratic Discriminate Analysis Results(training): Tuning - NA, AUROC - 0.998, Threshold - .176, Accuracy - 0.995, TPR - 0.871, FPR - 0.00121, Precision - 0.960
+
+
+```{r}
+set.seed(1)
+# QDA Model prediction for Holdout data
+Holdout.qda.probs = predict(qda.model, Holdout, type = 'prob')
+Holdout.qda.quan = quantile(Holdout.qda.probs$Y, .97)
+Holdout.qda.pred <- rep(0,2004177)
+Holdout.qda.pred[Holdout.qda.probs$Y > Holdout.qda.quan ] = 1
+table(Holdout.qda.pred, Holdout$Class)
+```
+
+```{r}
+# Holdout QDA calculations
+Holdout.qda.quan
+Holdout.accuracy.qda = (1942320+12749)/(1942320+12749+1731+47377)
+Holdout.accuracy.qda
+Holdout.tpr.qda = (12749/(1731+12749))
+Holdout.tpr.qda
+Holdout.fpr.qda = (47377/(47377+1942320))
+Holdout.fpr.qda
+Holdout.precision.qda = (12749/(12749+47377))
+Holdout.precision.qda
+
+# ROC curve for Holdout QDA
+roc.curve(Holdout$Class, Holdout.qda.probs$Y)
+```
+
+Quadratic Discriminate Analysis Results(Holdout): Tuning - NA, AUROC - 0.992, Threshold - .0426, Accuracy - 0.975, TPR - 0.880, FPR - 0.0238, Precision - 0.212
+
+
+## KNN
+
+```{r, cache=TRUE}
+set.seed(1)
+#Cross Validation and training
+train.control = trainControl(method = 'cv', number = 10, classProbs = TRUE)
+knn.model <- train(Class~., data = haiti, method = 'knn', preProcess = c("center", "scale"), tuneGrid=expand.grid(k = 1:20), trControl = train.control)
+
+
+#Model prediction for training data
+knn.probs = predict(knn.model, haiti, type = 'prob')
+knn.quan = quantile(knn.probs$Y, .97)
+knn.pred <- rep("0", 63241)
+knn.pred[knn.probs$Y > knn.quan] = "1"
+table(knn.pred,haiti$Class)
+```
+
+
+```{r}
+#Calculations for training data
+knn.quan
+knn_accuracy = (61197+1860)/(61197+1860+22+162)
+knn_accuracy
+tpr.knn = (1860/(1860+162))
+tpr.knn
+fpr.knn = (22/61197) 
+fpr.knn
+precision.knn = (1860/(1860+22))
+precision.knn
+
+#ROC Curve for training data
+roc.curve(haiti$Class, knn.probs$Y)
+```
+
+KNN Results(training): Tuning - k=7, AUROC - 1.000, Threshold - 0.714, Accuracy - 0.997, TPR - 0.920, FPR - 0.000359, Precision - 0.988
+
+
+```{r}
+set.seed(1)
+# KNN Model prediction on holdout data
+Holdout.knn.probs = predict(knn.model, Holdout, type = "prob")
+Holdout.knn.quan = quantile(Holdout.knn.probs$Y, .97)
+Holdout.knn.pred <- rep(0,2004177)
+Holdout.knn.pred[Holdout.knn.probs$Y > Holdout.knn.quan] = 1
+table(Holdout.knn.pred, Holdout$Class)
+```
+
+```{r}
+#Calculations for holdout data
+Holdout.knn.quan
+Holdout.knn_accuracy = (1962021+13409)/(1962021+13409+1071+27676)
+Holdout.knn_accuracy
+Holdout.tpr.knn = (13409/(13409+1071))
+Holdout.tpr.knn
+Holdout.fpr.knn = (27676/(1962021+27676)) 
+Holdout.fpr.knn
+Holdout.precision.knn = (13409/(13409+27676))
+Holdout.precision.knn
+
+#ROC Curve for holdout data
+roc.curve(Holdout$Class, Holdout.knn.probs$Y)
+```
+
+KNN Results(Holdout): Tuning - k=7, AUROC - 0.963, Threshold - 0.0703, Accuracy - 0.986, TPR - 0.926, FPR - 0.0139, Precision - 0.326
+
+
+### Tuning Parameter $k$
+
+```{r}
+plot(knn.model)
+```
+
+K-value for KNN:
+The optimal tuning parameter found for KNN regression was k = 7, the cross validation was run on the training portion of the data which was comprised of the original 'haiti' dataset. Of this data k values were searched from k = 1 to k = 20, out of the results for this test k value of five was seen as optimal and corresponded with the highest accuracy, and thus smallest RMSE value. These results can be seen in the figure above for the accuracy as k-neighbors increases. I was surprised that the k-value was optimized at seven because normally the k-value performs better in higher values.
+
+## Penalized Logistic Regression (ElasticNet)
+
+```{r, cache = TRUE}
+set.seed(96)
+#EN model
+grid=10^seq(10,-3,length=20)
+train.control = trainControl(method = "cv", number = 10, classProbs = TRUE)
+en.model = train(Class~., data = haiti, method = 'glmnet', tuneGrid = expand.grid(alpha = c(0.01,0.2,0.4,0.6,0.8,0.99), lambda = grid), trControl = train.control, family = 'binomial', prob = TRUE)
+
+
+#Model predictions
+en.probs=predict(en.model, newx = model.matrix(Class~., data=haiti), type = 'prob')
+en.quan = quantile(en.probs$Y, 0.97)
+en.pred <- rep(0, 63241)
+en.pred[en.probs$Y > en.quan] = 1
+table(en.pred, haiti$Class)
+```
+
+```{r}
+#Calculations for training Elastic Net
+en.quan
+EN_accuracy = ((61197+1658)/(61197+1658+364+22))
+EN_accuracy
+tpr.en = (1658/(1658+364))
+tpr.en
+fpr.en = (22/(22+1658)) 
+fpr.en
+precision.en = (1658/(1658+22))
+precision.en
+
+#ROC Curve for training Elastic Net
+roc.curve(haiti$Class, en.probs$Y)
+```
+
+Penalized Logistic Regression Results(training): Tuning - alpha = .99 and lambda = 0.001, AUROC - 0.997, Threshold - 0.322, Accuracy - 0.994, TPR - 0.820, FPR - 0.0131, Precision - 0.987
+
+```{r, cache=TRUE}
+Holdout.en.probs=predict(en.model, newdata = model.matrix(Class~., data=Holdout), type = 'prob')
+Holdout.en.quan = quantile(Holdout.en.probs$Y, 0.97)
+Holdout.en.pred <- rep(0, 2004177)
+Holdout.en.pred[Holdout.en.probs$Y > Holdout.en.quan] = 1
+table(Holdout.en.pred, Holdout$Class)
+```
+
+```{r}
+#Calculations for testing Elastic Net
+Holdout.en.quan
+Holdout.EN_accuracy = ((1944029+14458)/(1944029+14458+22+45668))
+Holdout.EN_accuracy
+Holdout.tpr.en = (14458/(14458+22))
+Holdout.tpr.en
+Holdout.fpr.en = (45668/(45668+1944029)) 
+Holdout.fpr.en
+Holdout.precision.en = (14458/(14458+45668))
+Holdout.precision.en
+
+#ROC Curve for testing Elastic Net
+roc.curve(Holdout$Class, Holdout.en.probs$Y)
+```
+
+Penalized Logistic Regression Results(Holdout): Tuning - alpha = .99 and lambda = 0.001, AUROC - 0.999, Threshold - 0.0939, Accuracy - 0.977, TPR - .998, FPR - 0.023, Precision - 0.240
+
+### Tuning Parameter
+```{r}
+par(mfrow = c(1,2))
+plot(en.model$bestTune)
+plot(en.model)
+```
+
+Alpha and Lambda value for Elastic Net regression:
+The optimal tuning parameter found for the Elastic Net regression is an alpha value of 0.99 and value lambda = 0.001. These values were found using cross validation and corresponded to the lowest lambda level out of the grid of lambda values searched, as well of the best alpha over a list of various alpha values. This value can be seen from the 'bestTune' value, which takes the respective values of alpha and lambda. Additionally the plot of en.model shows the resulting accuracy of some of the other alpha values. 
+
+## Random Forest
+
+```{r, cache=TRUE}
+set.seed(1)
+# Random Forest
+train.control = trainControl(method = "cv", number = 10, classProbs = TRUE)
+rf.model = train(Class~., data = haiti, method = 'rf', tuneGrid = expand.grid(.mtry = c(1,2,3)), ntree = 200, trControl = train.control)
+
+# Model prediction for training data
+rf.probs = predict(rf.model, haiti, type = 'prob')
+rf.quan = quantile(rf.probs$Y, .97)
+rf.pred <- rep(0, 63241)
+rf.pred[rf.probs$Y > rf.quan] = 1
+table(rf.pred, haiti$Class)
+```
+
+
+```{r}
+#Model calculations for rf training
+rf.quan
+rf_accuracy = (61219+1896)/(61219+1896+126+0)
+rf_accuracy
+rf.knn = (1896/(1896+126))
+rf.knn
+rf.knn = (0/61219) 
+rf.knn
+precision.rf = (1896/(1896+0))
+precision.rf
+
+#ROC Curve for training
+roc.curve(haiti$Class, rf.probs$Y)
+```
+
+Random Forest Results(training): Tuning - mtry = 1 and ntrees = 200, AUROC - 1.000, Threshold - 0.755, Accuracy - 0.998, TPR - .937, FPR - 0, Precision - 1.00
+
+```{r, cache=TRUE}
+set.seed(1)
+# Model prediction for Holdout data
+Holdout.rf.probs = predict(rf.model, Holdout, type = "prob")
+Holdout.rf.quan = quantile(Holdout.rf.probs$Y, 0.97)
+Holdout.rf.pred = rep(0, 2004177)
+Holdout.rf.pred[Holdout.rf.probs$Y > Holdout.rf.quan] = 1
+table(Holdout.rf.pred, Holdout$Class)
+```
+
+```{r}
+#Model calculations for rf testing
+Holdout.rf.quan
+Holdout.rf_accuracy = (1959986+13786)/(1959986+13786+29711+694)
+Holdout.rf_accuracy
+Holdout.rf.knn = (13786/(13786+694))
+Holdout.rf.knn
+Holdout.rf.knn = (29711/(29711+1959986)) 
+Holdout.rf.knn
+Holdout.precision.rf = (13786/(13786+29711))
+Holdout.precision.rf
+
+#ROC Curve for rf testing
+roc.curve(Holdout$Class, Holdout.rf.probs$Y)
+```
+
+Random Forest Results(Holdout): Tuning - mtry = 1 and ntrees = 200, AUROC - 0.983, Threshold - 0.13, Accuracy - 0.985, TPR - .952, FPR - 0.0149, Precision - 0.317
+
+
+### Tuning Parameters
+```{r}
+plot(rf.model)
+```
+Tuning parameters for Random Forest model:
+The optimal tuning parameter found through 10-fold cross validation was a mtry value of 1, meaning for each random forest ensemble, one parameter is used at random. Due to only having three parameters, the number of testable ranges for mtry was reduced. The accuracy rates can be seen for mtry levels 1, 2, and 3 in the graph above.
+
+## SVM
+
+```{r, cache=TRUE}
+set.seed(1)
+# SVM
+train.control = trainControl(method = "cv", number = 10, classProbs = TRUE)
+svm.mod <- train(Class~., data = haiti, method = "svmRadial", tuneGrid = expand.grid(C =c(0.1,1,10,100,1000), sigma=c(.5,1,3,5,6)), trControl = train.control, preProcess = c("center","scale"))
+
+# Model predictions for training data
+svm.probs = predict(svm.mod, haiti, type = 'prob')
+svm.quan = quantile(svm.probs$Y, .97)
+svm.pred = rep(0,63241)
+svm.pred[svm.probs$Y > svm.quan] = 1
+table(svm.pred, haiti$Class)
+```
+
+```{r}
+#Model calculations for svm training
+svm.quan
+svm_accuracy = (61201+1880)/(61201+1880+142+18)
+svm_accuracy
+tpr.svm = (1880/(1880+142))
+tpr.svm
+fpr.svm = (18/(61201+18)) 
+fpr.svm
+precision.svm = (1880/(1880+18))
+precision.svm
+
+#ROC Curve for training
+roc.curve(haiti$Class, svm.probs$Y)
+```
+
+Support Vector Machines Results(training): Tuning - cost = 100 and gamma = 6, AUROC - 1.000, Threshold - 0.825, Accuracy - 0.997, TPR - 0.930, FPR - 0.000294, Precision - 0.991
+
+```{r, cache=TRUE}
+set.seed(1)
+#Model predictions for holdout data
+Holdout.svm.probs = predict(svm.mod, Holdout, type = 'prob')
+Holdout.svm.quan = quantile(svm.probs$Y, 0.97)
+Holdout.svm.pred = rep(0, 2004177)
+Holdout.svm.pred[Holdout.svm.probs$Y > Holdout.svm.quan] = 1
+table(Holdout.svm.pred, Holdout$Class)
+```
+
+
+```{r}
+#Model calculations for SVM Holdout
+Holdout.svm.quan
+Holdout.svm_accuracy = (1980135+8879)/(1980135+8879+9562+5601)
+Holdout.svm_accuracy
+Holdout.tpr.svm = (8879/(5601+8879))
+Holdout.tpr.svm
+Holdout.fpr.svm = (9562/(1980135+9562)) 
+Holdout.fpr.svm
+Holdout.precision.svm = (8879/(9562+8879))
+Holdout.precision.svm
+
+#ROC Curve for SVM Holdout
+roc.curve(Holdout$Class, Holdout.svm.probs$Y)
+```
+
+
+Support Vector Machines Results(Holdout): Tuning - cost = 100 and gamma = 6, AUROC - 0.978, Threshold - 0.825, Accuracy - 0.992, TPR - 0.613, FPR - 0.00481, Precision - 0.481
+
+### Tuning Parameters
+
+```{r}
+plot(svm.mod)
+```
+SVM Tuning Parameters:
+The SVM model was run using a radial kernal as recommend in the collab video. In addition through 10 fold cross-validation the optimal tuning parameters were a Cost value of 100, and a Gamma value of 6. Overall there isn't a significant gain to accuracy and respective error rates as the Gamma increases beyond that so I kept the Gamma limit of 6. In addition it appears that as Cost increases so does the accuracy rate until we reach gamma value of 6 for Cost 100 and 1000. At that point Cost = 100 leads to a higher accuracy metric.
+
+## Threshold Selection
+
+In order to choose a proper threshold level for the cross-validation algorithms, I measured the number of blue tarps present over the total number of observations. Roughly three percent of the observations were blue tarps. I assumed that when predicting the probabilities for the respective algorithms the top three percent of these probabilities should correspond to the blue tarps with the remaining 97 percent non blue tarps. I set the threshold level at each algorithms' 97th percentile of probability results to test this hypothesis. I used this same threshold for the hold-out data set in order to keep the threshold metric consistent. Less than one percent of the hold-out data corresponded to blue tarps, because of this some of the metrics such as precision would be affected. That being said, I wanted to see if under the same relative threshold level the algorithms would perform comparably (which they did) and measure their performance levels when compared to the training algorithms.
+
+
+# Cross-Validation Performance Results
+```{r}
+# Cross-Validation Performance Table
+training_chart = read.csv('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/training_chart_proj2.csv', header = TRUE)
+kable(training_chart, caption = 'Performance on training data using cross validation')
+```
+
+
+# Holdout Performance Results
+```{r}
+# Holdout Performance table
+houldout_chart = read.csv('/Users/nimabeheshti/Desktop/MSDS/SYS 6018 - Spring 2021/Holdout_chart_proj2.csv', header = TRUE)
+kable(houldout_chart, caption = 'Performance on Hold-Out data')
+```
+
+# Conclusions
+
+### Conclusion \#1
+"A discussion of the best performing algorithm(s) in the cross-validation and hold-out data."
+
+When looking at performance, there are many aspects of each algorithm that show great performance results; however when trying to decide which algorithms performed best for each of the cross-validation and hold-out datasets the metric for precision, true positive rate, and run time are the most telling. Precision tells us out of the predicted responses for blue tarp being present, what percentage the algorithm is actually predicting correctly. True positive rate gives us how many blue tarps we identified over the number of blue tarps actually present. Run time is the amount of time it takes for the algorithm to run. Once we find the best algorithms by way of these criteria, we can check the other parameters to see if they are consistent. Based on these results we can then judge which algorithms were best performing. One observation to note is that overall, the precision metric for the hold-out data set was significantly lower than in the cross-validated. The reason for this is due to the threshold value selected. Threshold was selected by finding the top 3% of probabilities for each of the algorithms. Around 3% of the cross-validation data was blue tarps, so assuming the algorithms performed correctly you'd see high precision. On the other hand, less than 1% of the data in the hold-out data were blue tarp observation. Because of this, the hold-out data naturally sees more false positives given that the threshold level is still set to the top 3%.
+
+Starting with the cross-validation training data, Random Forest can be seen as the best performing algorithm. The Random Forest algorithm had a precision of 1.00 meaning that a 100% positive prediction of blue tarp presence was correct. In addition to having perfect precision, this algorithm also had consistently strong metrics across the board, including a true positive rate of 0.938, meaning it correctly identified 93.8% of blue tarps. Another two strong algorithm were the KNN, and SVM algorithms. KNN showed a near perfect precision of 0.988 and similarly strong metrics across the board (although not as strong as Random Forest). SVM showed very similar results as KNN with a precision of 0.991 and strong results across the board.
+
+Using the same criteria in judging performance, we can see that the hold-out dataset's best performing algorithms, by measure of precision, were Random Forest (RF), KNN, and SVM. SVM had the highest precision metric of 0.481; however after further examining the results we can see that SVM also had an poor true positive rate of 0.613. Given that SVM was only able to find 61.3% of all blue tarps, we can confidently say that the overall performance of the SVM algorithm wasn't too strong, and we should look to the next best algorithms, which were KNN and RF. RF had a precision of 0.317, which was very high compared to all other algorithms and had very strong metrics across the board including a high true positive rate. Similarly, KNN had a precision of 0.326 but a slightly lower true positive rate and AUROC. One other aspect of performance that should be considered is the run time of the algorithms. KNN and SVM take considerably longer than RF to run. Given that information and based on the results, it can be stated that Random Forest was the best performing algorithm in the hold-out data set, but just like in the cross-validation data set, KNN was a very close second.
+
+### Conclusion \#2
+"A discussion or analysis justifying why your findings above are compatible or reconcilable."
+
+Although there are some differences in the formatting and information found in the cross-validation and hold-out data, they are overall compatible, as are the algorithms used. The initial cross-validation data set had four variables: Class, Red, Green, and Blue. The class variable was able to be factored and used as either Y for blue tarp, or N for none blue tarp. The hold-out data had many more variables and needed more cleaning however, through the analysis of variables present, it could be deduced that the variable B1 corresponded to Red, B2 corresponded to Green, and B3 corresponded to Blue. In addition the Class variable of blue tarp, and non blue tarp could be added by the name of the files contained withing the hold-out data set file.
+
+Once the data sets were both cleaned and matching in variables, the algorithms were able to be tested and proved compatible as well. Most of the metrics for the respective algorithms were consistent with one another including the AUROC, accuracy, true positive rate, and false positive rate. The precision metric was also compatible for the algorithms in the respective two sets of data despite having the threshold issue mentioned previously. In addition, the best performing algorithm was consistent for both sets of data in that Random Forest and KNN were very dominant across the board of metrics for both the cross-validation and hold-out data sets.
+
+Had the resulting hold-out algorithms not performed consistently with their respective data set  and consistently relative to their cross-validation results we could question compatibility, but because they did perform as expected we know that our findings are compatible.
+
+
+### Conclusion \#3
+"A recommendation and rationale regarding which algorithm to use for detection of blue tarps."
+
+The overall best algorithm and the one I would recommend for detection of blue tarps is the Random Forest (RF) algorithm. Random Forest works by creating an ensemble tree predictor using bagging. When each node in each tree is created only a random subset of the predictor variables are used. The optimal tuning parameters turned out to be mtry = 1 and ntrees = 200.
+
+During the cross-validation portion of the training, the RF algorithm performed phenomenally with AUROC of 100%, accuracy of 99.8%, true positive rate of 93.8%, false positive rate of 0% and precision of 100%. RF performed better than all other algorithms within the cross-validation data. Likewise in the hold-out data, RF performed better than the other algorithms consistently and in the most important metrics. Holding the algorithm to the same tuning parameters, the performance corresponded to a AUROC of 98.3%, accuracy of 98.5%, true positive rate of 95.2%, false positive rate of 1.49%, and a precision of 31.7%. Although this precision is lower than seen in the cross-validation data, the lower precision is consistent across the board of precision values for the hold-out data and is due to the threshold selection that optimized training data in order to consistently test the hold-out data.
+
+The run-time of RF was considerably faster than other algorithms that required tuning metrics such as Penalized Log Reg, SVM, and KNN. This faster run-time gives RF a boost given the time crunch rescue workers are in for a model that can quickly and efficiently identify the blue tarps.
+
+What the results tell us from the hold-out data is that the algorithm correctly identifies 95.2% of actual blue tarps, while only falsely identifying 1.49% of non blue tarps. More importantly however, the algorithm tells you that of all your predicted blue tarps, 31.7% of them will actually be blue tarps (precision metric). With limited resources it is important to know that when the search and rescue workers go out to find these blue tarps and rescue people, they will be as successful as possible. Although 31.7% precision isn't as high as you'd like, it is one of the best cases for these rescue works to have a high save rate for the missions they carry out. 
+
+The Support Vector Machine (SVM) algorithm did have a higher precision metric but the true positive metric was significantly lower than expected. While you want to have the highest chance of a mission successfully finding a survivor, you also want to make sure that you actually identify these blue tarps. In the SVM's case, only 61.3% of the blue tarps were actually identified, which causes issues because even if you had the resources to search all predicted blue tarps, 38.7% of the people would still be stranded and likely die. In addition to SVM, KNN also had similar metrics as RF with a precision of 0.326 and a true positive rate of 0.926, but when looking at overall run-time, both SVM and KNN take considerably longer than RF. Because of this and the previously stated performance metrics, random forest is the optimal algorithm for detecting blue tarps in this scenario.
+
+### Conclusion \#4
+"A discussion of the relevance of the metrics calculated in the tables to this application context"
+
+With the earthquake ravaging the landscape and thousands of people stranded in need of food, water, and rescuing, it is important that the metrics used to guide rescue efforts are relevant and beneficial to the rescue efforts. Most of the metrics calculated in the tables are reliant on the threshold used. 
+
+In order to optimize the cross-validation data, the threshold used for each algorithms' testing was the 97th percentile of the probability predictions. The 97th percentile was used because the cross-validation data corresponded to around 97% non blue tarps, and 3 percent blue tarps. Testing the cross-validation data this way would ideally lead you to have a near perfect precision, and true positive rate as these can be tested to see if the algorithm correctly predicts the observations with high enough probability values to be picked up in the top three percentile. So while this method can be used to find good precision and true positive rates, your accuracy method is almost guaranteed to be very high as well considering you are effectively allowing the bottom 97% to classify as non blue tarps. Because of this we can view accuracy as not very relevant in the application of finding the blue tarps. For similar reasons, the AUROC metric is also not a very important metric given the context of finding the blue tarps. 
+
+The most important metrics calculated in the context of finding the blue tarp are the precision and true positive rate metrics. The precision is important because it measures what percent of blue tarp predictions are actually blue tarps. For context, the precision value of .317 found in the hold-out random forest algorithm, means that every rescue mission has a 31.7% of finding a blue tarp. In an ideal situation, such as the training set, you would want this number to be as close to 100%, but as previously mentioned, threshold selection limits this number in the hold-out data set. The true positive rate metric is also important in this context because you ideally want to identify all blue tarps and the higher your true positive rate, the higher the percentage of blue tarps identified correctly. The false positive rate can be important as well because it measures what percentage of true negatives your algorithm predicts as a positive. However, for the context of this application it isn't as relevant as having a good precision and true positive rate because the hold-out data naturally has a higher number of false positives.
+
+One metric that is important to this application context is run time which isn't a metric in the table. Run time is important to note because of the time sensitiveness of the given situation. As mentioned the faster an ideal algorithm is found the more people will be saved so you don't want to waste time waiting for a specific algorithm to run when a similar performing algorithm could run much faster.
+
+
+
+### Conclusion \#5
+"How effective would this project be in actually saving lives"
+
+Overall, I would say that the work here is a great start but that more work would definitely need to be done. Throughout this project we come up with some pretty good predictive metrics for locating the blue tarps, but that is just one step in the process of saving an individual's life. What this data set doesn't account for are factors such as how accessible are the locations of the blue tarps found when compared to other locations? How isolated from food and water are the blue tarps in general? Is there a reasonable metric that could account for how long it would actually take to reach the location of the blue tarp and how would that play into decision making?
+
+For example, rescue works could also benefit from an algorithm that can map out an optimal route for them to take in order to rescue as many people as possible. This algorithm would need more data of course, but could optimize their approach. For example, if they need to fly a helicopter to one area, where could they then go to quickly find others to fill capacity and save multiple trip?
+
+Ultimately, having this extra data would be crucial to efficiently save as many people as possible given the time constraints and limited resources (people, equipment, food/water for the people currently lost). That being said, the search and rescue plans would all need to start somewhere and this project is a good first step as it can effectively identify where blue tarps were found.
+
+
+### Conclusion \#6
+"How does run time affect your tests given the real world application"
+
+One very important aspect of this project that could have impact in context of helping rescue crews quickly find survivors using the best algorithm is the run-time for each of the respective models. It's no surprise that some of these models have longer run-time than others, however the question must also arise; which algorithm is most efficient in regards to getting consistently good results with fast execution? The data we worked with in this project for training consisted of around 63,000 observations and the testing hold-out data consisted of over 2 million observations. The real world setting likely had more data or at least different types of data that would then need to be cleaned and formatted to fit the algorithms. Some of the algorithms such as Logistic Regression, LDA, and QDA have very fast run-times but others such as KNN and SVM were incredibly slow due to the tuning parameter ranges. For this assignment, I tested a range of k-values between 1-20 and the results still took over an hour to train/test on the holdout data. Similarly SVM took just as long for the range of costs and gamma values I used. In a real world setting, you will likely have more data to process and more tuning ranges/parameters to test through. These increases could lead to considerable run-time that may find some algorithms inefficient to run.
+
+In the context of the Haiti disaster, many of the survivors are in desperate need of food, water, and rescue, and every minute spent waiting for the algorithm's completion is another minute rescue workers could be reaching more people with the needed supplies. The Random Forest algorithm, which performed the best and which I would recommend in blue tarp detection actually ran relatively fast considering it was still searching through some tuning parameter.
+
+### Conclusion \#7
+"The trade off between optimizing cross-validation training vs hold-out testing metrics."
+
+One very important question made in context of these calculations is whether to optimize the cross-validation training or hold-out testing? What I mean by 'optimize' is setting up the algorithms to get more favorably resulting metrics. Most of the metrics calculated for these algorithms were based off the threshold value chosen. As you increase your threshold value, the metrics for the respective algorithms should improve, at least until you reach the optimal threshold. The issue is that each of the data sets has a different optimal threshold. 
+
+I chose to optimize the cross-validation set of data by setting the threshold level to each algorithm's predicted 97th percentile. I did so to correspond to the 3% of the cross-validation data that is comprised of blue tarps. In order to stay consistent, I held the hold-out algorithms to the same 97th percentile, but because less than 1% of the hold-out data was actually blue tarps, I knew the resulting prediction table would have many false positives for each of the algorithms thus lowering the precision of each algorithm. 
+
+Had I instead used a threshold value that was closer to the 99th percentile, the cross-validation algorithms' metrics would be completely thrown off but the hold-out metrics would have improved. The precision metric would likely be significantly higher than it was with the threshold set to the 97th percentile.  
+
+Ultimately, the best performing algorithm found from the cross-validation data set was also the best performing algorithm found in the hold-out data. Therefore, I am happy with the results and support the decision to optimize the cross-validation algorithms. But the question still lies if in the context of this project we are trying to evaluate the overall performance of hold-out data, should we have optimized our threshold for that? 
+
+
+### Conclusion \#8
+"Were there multiple adequately performing models?"
+
+Although I believe Random Forest is the optimal model to choose given the algorithm's performance and the efficiency it provides given the context of the Haiti application, the KNN would have performed adequately as well. 
+
+As mentioned earlier, KNN proved very favorable in both the cross-validation data set, and the hold-out dataset with a precision of 32.6% and a true positive rate of 92.6%. Had time not been an issue I think it would be very difficult to decide between the KNN and RF model. Therefore, given different circumstances, KNN would be an adequately performing model. I am very confident that these two algorithms (KNN and RF) were the best algorithms out of the seven used in this project.
+
+
+
+
+
+
+# Work cited
+Works cited:
+R-documentation on ROC curves: https://www.rdocumentation.org/packages/ROSE/versions/0.0-3/topics/roc.curve
+
+R-documentation on train and trainControl methods: https://www.rdocumentation.org/packages/caret/versions/4.64/topics/train
+https://www.rdocumentation.org/packages/caret/versions/6.0-86/topics/trainControl
+
+List of available models for train method: 
+https://rdrr.io/cran/caret/man/models.html
+
+R-documentation on caret package:
+https://cran.r-project.org/web/packages/caret/caret.pdf
+
+Information on Elastic Net Regression:
+http://www.sthda.com/english/articles/37-model-selection-essentials-in-r/153-penalized-regression-essentials-ridge-lasso-elastic-net/
+
+Information on printing better tables in r markdown file:
+https://rmarkdown.rstudio.com/lesson-7.html 
+
+
+```{r, echo=FALSE}
+knitr::knit_exit()    
+```
+
